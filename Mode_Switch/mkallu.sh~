@@ -1,0 +1,8 @@
+
+
+mount -o loop FDimage /mnt
+rm /mnt/bin/*
+umount /mnt
+
+sh mku u1
+mku u2

@@ -1,0 +1,424 @@
+
+void list_dir()
+{
+	int ino;
+	INODE *temp;
+	MINODE *mtemp;
+	int i,dev; 
+	char* cp;
+        char buf[BLKSIZE];
+	if(pathname[0])
+	{
+		if(pathname[0]=='/')
+			dev=root->dev;
+		else
+			dev = running->cwd->dev;
+		ino=getino(dev,pathname);		
+		if(!ino)
+			printf("\ndirectory doesn't exist");	
+		mtemp=iget(dev,ino);
+		temp=&mtemp->INODE;
+	}	
+	else
+	{
+		temp=&(running->cwd->INODE);
+		dev= running->cwd->dev;
+	}
+	for(i=0;i<12;i++)
+	{	
+		iblock=temp->i_block[i];
+		if(!iblock)
+		{
+			return;
+		}
+		else
+		{        
+			get_block(dev,iblock,buf);	
+			dp = (DIR *)buf;
+			cp = (char *)buf;
+//			put_block(dev, iblock, buf);
+			while(dp->rec_len&&*cp<BLKSIZE+buf&&*cp!=NULL)	
+			{
+				printf("\n%s",dp->name);
+				cp+=dp->rec_len; 
+				dp =(DIR*)cp;
+			}	
+		}
+	}
+}
+
+int check_list(char *parent,char* child)
+{
+	int ino;
+	INODE *temp;
+	MINODE *mtemp;
+	int i,dev,flag=1; 
+	char* cp;
+        char buf[BLKSIZE];
+	if(parent[0])
+	{
+		if(parent[0]=='/')
+			dev=root->dev;		
+		else
+			dev = running->cwd->dev;
+		ino=getino(dev,parent);		
+		if(!ino)
+			printf("\ndirectory doesn't exist");	
+		mtemp=iget(dev,ino);
+		temp=&mtemp->INODE;
+	}	
+	
+	for(i=0;i<12;i++)
+	{	
+		iblock=temp->i_block[i];
+		if(!iblock)
+		{
+			return 0;
+		}
+		else
+		{        
+			get_block(dev,iblock,buf);	
+			dp = (DIR *)buf;
+			cp = (char *)buf;
+			//put_block(dev, iblock, buf);
+			while(dp->rec_len&&(cp<BLKSIZE+buf))//&&(*cp!=NULL))	
+			{
+				if(strstr(dp->name,child))
+					flag=0;			
+				cp+=dp->rec_len; 
+				dp =(DIR*)cp;
+			}	
+		}
+	}
+
+return 0;
+}
+
+
+void make_dir()
+{
+	int ino;
+	INODE *temp;
+	MINODE *mtemp;
+	time_t t;
+	int i=1,dev; 
+	char* cp,*parent,*child;
+        char buf[BLKSIZE],tem[256];
+	strcpy(tem,pathname);
+	parent=dirname(pathname);
+	child=basename(tem);	
+		
+	printf("\nparent:%s\nchild:%s",parent,child);
+	if(pathname[0]=='/')
+	{
+		dev=root->dev;
+			
+	}
+	else
+		dev=running->cwd->dev;
+	ino=getino(dev,parent);
+
+	mtemp=iget(dev,ino);
+	temp=&mtemp->INODE;
+	/*i=check_list(parent,child);
+	if(i)
+		printf("\ncan create");		
+	else 
+		printf("\ncant create");*/		
+	if((temp->i_mode&DIR_MODE==DIR_MODE)&&i)
+		mymkdir(mtemp,child,dev);
+	printf("\nmkdir happening");	
+
+	temp->i_links_count++;
+	temp->i_atime=ctime(&t);
+	mtemp->dirty=1;
+	iput(mtemp);	
+}
+
+
+
+int mymkdir(MINODE *mtemp, char *name,int dev)
+{
+int ino,bno,i;
+MINODE *temp;
+INODE *itemp;
+
+char buf[BLKSIZE];
+	
+	ino = ialloc(dev);    
+        bno = balloc(dev);
+	if(!ino)
+		printf("ino not allocated");
+	
+	if(!bno)
+		printf("bno not allocated");	
+			printf("\nbno:%d",bno);
+
+	temp = iget(dev, ino);
+	itemp=&temp->INODE;
+
+	itemp->i_mode=DIR_MODE;
+	itemp->i_uid  = running->uid;	// Owner uid 
+  	itemp->i_gid  = running->gid;	// Group Id
+  	itemp->i_size = BLKSIZE;		// Size in bytes 
+  	itemp->i_links_count = 2;	        // Links count=2 because of . and ..
+  	itemp->i_atime =time(0L);
+	itemp->i_ctime = time(0L);
+	itemp->i_mtime = time(0L);  // set to current time
+  	itemp->i_blocks = 2;                	// LINUX: Blocks count in 512-byte chunks 
+  	for(i=1;i<15;i++)
+		itemp->i_block[i] =0; 	
+	itemp->i_block[0] = bno;             // new DIR has one data block   
+	
+  	temp->dirty = 1;               // mark minode dirty
+	
+	iput(temp);
+	
+//	printf("\nmy mkdir1");
+	DIR *dp=(DIR*)buf;
+	dp->inode=ino;
+	dp->rec_len=12;	
+	dp->name_len=1;
+	dp->file_type=0;
+	strcpy(dp->name,".");
+//	printf("\nmy mkdir2");	
+	
+	dp=(DIR*)((int)dp+dp->rec_len);
+	dp->inode=mtemp->ino;
+	dp->rec_len=1012;
+	dp->name_len=2;
+	dp->file_type=0;
+	strcpy(dp->name,"..");
+
+//	printf("\nmy mkdir4");
+
+	put_block(dev,bno,buf);
+//	printf("\nmy mkdir5");
+	
+        enter_name(mtemp, ino, name);
+return 0;
+}
+
+int enter_name(MINODE *pip, int myino, char *myname)
+{	
+	char buf[BLKSIZE],buf2[BLKSIZE];
+	INODE *temp;
+	int rem,i=0,bno,bno2,dev,needlen,len,j;
+	dev=pip->dev;	
+	len=strlen(myname);
+	needlen=4*((8 +len+ 3)/4);
+	temp=&pip->INODE;
+//	printf("\nmy mkdir6");	
+	while(temp->i_block[i])
+	{	
+		i++;
+		
+	}
+//	printf("\nmy mkdir7");
+	bno=temp->i_block[i-1];
+		printf("\nbno:%d",bno);
+	printf("\nino1:%d",myino);
+	
+	get_block(dev,bno,buf);	
+//	printf("\nmy mkdir7");
+
+	DIR *dp = (DIR *)buf;
+//	printf("\nmy mkdir71");
+	/*
+	for(j=0;j<12;j++)
+	{
+	printf("iblock[%d] = %d\n", j, temp->i_block[j]);
+}
+	*/
+		printf("\ninode:%d",dp->inode);
+	
+	if(dp->inode==0)
+	{
+		dp->inode=myino;				
+		dp->rec_len=1024;
+		dp->name_len=strlen(myname);
+		strcpy(dp->name,myname);		
+		put_block(dev,bno,buf);		
+	}	
+	else
+	{
+		//printf("\nmy mkdir9");
+
+		while ((dp+dp->rec_len) <buf + BLKSIZE)
+		{
+			dp = (DIR *)(dp+dp->rec_len);
+		} 
+		rem=dp->rec_len-(4*((8 + dp->name_len + 3)/4));
+		//printf("\nmy mkdir8");		
+		if(rem>=needlen)
+		{
+			//printf("\nmy mkdir813");
+			dp->rec_len=4*((8 + dp->name_len + 3)/4);
+			dp=(DIR*)(dp+dp->rec_len);
+			dp->inode=myino;				
+			dp->rec_len=rem;
+			dp->name_len=strlen(myname);
+			strcpy(dp->name,myname);		
+			put_block(dev,bno,buf);			
+		}
+		else
+		{
+		//	printf("\nmy mkdir8w34");
+			bno2=balloc(dev);						
+			get_block(dev,bno2,buf2);
+			temp->i_block[i]=bno2;
+			dp=(DIR*)buf2;				
+			dp->inode=myino;				
+			dp->rec_len=1024;
+			dp->name_len=strlen(myname);
+			strcpy(dp->name,myname);		
+			put_block(dev,bno2,buf2);
+			temp->i_size+=1024;
+		}
+	}
+printf("\nentername");	
+}
+
+int creat_file()
+{
+	int ino;
+	INODE *temp;
+	MINODE *mtemp;
+	time_t t;
+	int i=1,dev; 
+	char* cp,*parent,*child;
+        char buf[BLKSIZE],tem[256];
+	strcpy(tem,pathname);
+	parent=dirname(pathname);
+	child=basename(tem);	
+		
+	printf("\nparent:%s\nchild:%s",parent,child);
+	if(pathname[0]=='/')
+	{
+		dev=root->dev;
+			
+	}
+	else
+		dev=running->cwd->dev;
+	ino=getino(dev,parent);
+printf("\ncreat happening");
+	mtemp=iget(dev,ino);
+	temp=&mtemp->INODE;
+	/*i=check_list(parent,child);
+	if(i)
+		printf("\ncan create");		
+	else 
+		printf("\ncant create");		
+*/printf("\ncreat happening");
+	if((temp->i_mode&DIR_MODE==DIR_MODE)&&i)
+		my_creat(mtemp,child,dev);
+	printf("\ncreat happening");	
+	
+	temp->i_links_count++;
+	temp->i_atime=ctime(&t);
+	mtemp->dirty=1;
+	iput(mtemp);
+return 0;
+} 
+
+
+int my_creat(MINODE *mtemp, char *name,int dev)
+{
+int ino,bno,i;
+MINODE *temp;
+INODE *itemp;
+
+char buf[BLKSIZE];
+	
+	ino = ialloc(dev);    
+        bno = balloc(dev);
+		printf("\nino1:%d",ino);
+
+		printf("\nbno1:%d",bno);
+	if(!ino)
+		printf("ino not allocated");
+	
+	if(!bno)
+		printf("bno not allocated");	
+	temp = iget(dev, ino);
+	itemp=&temp->INODE;
+
+	itemp->i_mode=0X81A4;
+	itemp->i_uid  = running->uid;	// Owner uid 
+  	itemp->i_gid  = running->gid;	// Group Id
+  	itemp->i_size = 0;		// Size in bytes 
+  	itemp->i_links_count = 1;	        // Links count=2 because of . and ..
+  	itemp->i_atime =time(0L);
+	itemp->i_ctime = time(0L);
+	itemp->i_mtime = time(0L);  // set to current time
+  	itemp->i_blocks = 2;                	// LINUX: Blocks count in 512-byte chunks 
+  	for(i=1;i<15;i++)
+		itemp->i_block[i] =0; 	
+	itemp->i_block[0] = bno;             // new DIR has one data block   
+	
+  	temp->dirty = 1;               // mark minode dirty
+	
+	iput(temp);
+	
+//	printf("\nmy mkdir1");
+	DIR *dp=(DIR*)buf;
+	dp->inode=ino;
+	dp->rec_len=12;	
+	dp->name_len=1;
+	dp->file_type=0;
+	strcpy(dp->name,".");
+//	printf("\nmy mkdir2");	
+	
+	dp=(DIR*)(dp+dp->rec_len);
+	dp->inode=mtemp->ino;
+	dp->rec_len=1012;
+	dp->name_len=2;
+	dp->file_type=0;
+	strcpy(dp->name,"..");
+
+//	printf("\nmy mkdir4");
+
+	put_block(dev,bno,buf);
+//	printf("\nmy mkdir5");
+	
+        enter_name(mtemp, ino, name);
+return 0;
+}  
+
+void change_dir()
+{
+	int ino;
+	INODE *temp;
+	MINODE *mtemp;
+	int i,dev; char* cp;
+        char buf[BLKSIZE];
+	if(pathname[0])
+	{
+		if(pathname[0]=='/')
+			dev=root->dev;		
+		else
+			dev = running->cwd->dev;
+		ino=getino(dev,pathname);		
+		if(!ino)
+			printf("\ndirectory doesn't exist");	
+		mtemp=iget(dev,ino);
+		temp=&mtemp->INODE;	
+	}	
+	else
+	{
+		temp=&(running->cwd->INODE);
+		dev= running->cwd->dev;
+	}
+	running->cwd=mtemp;
+	if(!strcmp(pathname,".."))
+		running->cwd->refCount--;
+	else
+		running->cwd->refCount++;
+	iput(mtemp);
+}
+
+void pwd(){printf("pwd");}
+
+void mystat(){printf("mystat");}
+void chmod_file(){printf("chmod");}
+void touch(){printf("touch");}

@@ -1,0 +1,22 @@
+#ifndef ucode_h
+#define ucode_h
+
+// ucode.c file
+#include "ucode.h"
+
+int show_menu();
+int find_cmd(char *name);
+int getpid();
+int ps();
+int chname();
+int kmode();
+int kswitch();
+int wait();
+int exit();
+int _kexit(int exitValue);
+int fork();
+int exec();
+int vfork();
+int invalid(char *name);
+
+#endif
